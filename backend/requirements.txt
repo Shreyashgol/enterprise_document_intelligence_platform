@@ -23,9 +23,8 @@ groq>=0.11
 # Loads backend/.env (GROQ_API_KEY, DATABASE_URL, …) automatically:
 python-dotenv>=1.0
 
-# Declared here for later phases (kept commented until their phase lands):
-# fastapi>=0.110
-# uvicorn>=0.29
-# pydantic>=2.6
-# pandas>=2.2
-# redis>=5.0
+# API layer (FastAPI service):
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+pydantic>=2.6
