@@ -1,0 +1,28 @@
+# Local PostgreSQL + pgvector for Phase 13 (alternative to a hosted Neon DB).
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#   export DATABASE_URL=postgresql://eip:eip@localhost:5432/eip
+#
+# The app service is added in the API phase.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: eip_postgres
+    environment:
+      POSTGRES_USER: eip
+      POSTGRES_PASSWORD: eip
+      POSTGRES_DB: eip
+    ports:
+      - "5432:5432"
+    volumes:
+      - eip_pgdata:/var/lib/postgresql/data
+      - ./init-pgvector.sql:/docker-entrypoint-initdb.d/init-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eip -d eip"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  eip_pgdata:
