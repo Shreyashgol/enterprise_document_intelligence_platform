@@ -8,6 +8,7 @@ import GraphPanel from "./components/GraphPanel";
 import AuthScreen from "./components/AuthScreen";
 import ThemeToggle from "./components/ThemeToggle";
 import UserMenu from "./components/UserMenu";
+import HelpModal from "./components/HelpModal";
 
 const TABS = [
   { id: "analyze", label: "Analyze" },
@@ -20,6 +21,7 @@ export default function App() {
   const { user } = useAuth();
   const [tab, setTab] = useState("analyze");
   const [health, setHealth] = useState(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   const refresh = useCallback(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
@@ -67,6 +69,16 @@ export default function App() {
 
           <div className="flex items-center gap-3">
             <StatusBadge health={health} />
+            <button
+              onClick={() => setShowHelp(true)}
+              className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              title="How to Use Guide"
+              aria-label="How to Use Guide"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
             <ThemeToggle />
             <UserMenu />
           </div>
@@ -102,6 +114,8 @@ export default function App() {
         Built from first principles — custom tokenizer, BiLSTM NER, relation
         extraction, NetworkX graph, pgvector RAG, Groq Llama 3.3.
       </footer>
+
+      <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />
     </div>
   );
 }
