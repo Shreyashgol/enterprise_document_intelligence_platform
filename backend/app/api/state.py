@@ -39,6 +39,7 @@ class Services:
         self.tagger = self._build_tagger()
         self.relation_extractor = RelationExtractor()
         self.kg = KnowledgeGraph()
+        self.users = self._build_user_store()
 
         embedder = HashingEmbedder(dim=settings.embed_dim)
         store = self._build_store(embedder.dim)
@@ -83,6 +84,20 @@ class Services:
             except Exception as exc:  # fall back to memory if DB unavailable
                 logger.warning("pgvector unavailable (%s); using in-memory store", exc)
         return InMemoryVectorStore(dim=dim)
+
+    def _build_user_store(self):
+        if settings.database_url:
+            try:
+                from app.auth.users import PgUserStore
+
+                logger.info("using PostgreSQL user store (users table)")
+                return PgUserStore(settings.database_url)
+            except Exception as exc:
+                logger.warning("Postgres users unavailable (%s); in-memory users", exc)
+        from app.auth.users import InMemoryUserStore
+
+        logger.info("using in-memory user store")
+        return InMemoryUserStore()
 
     def _build_generator(self):
         if settings.groq_api_key:

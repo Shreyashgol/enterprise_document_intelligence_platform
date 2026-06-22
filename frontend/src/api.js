@@ -25,6 +25,11 @@ async function request(path, { method = "GET", body, isForm } = {}) {
 export const api = {
   base: BASE,
   health: () => request("/health"),
+
+  // --- auth ---
+  signup: (body) => request("/auth/signup", { method: "POST", body }),
+  signin: (body) => request("/auth/signin", { method: "POST", body }),
+  google: (body) => request("/auth/google", { method: "POST", body }),
   ner: (text) => request("/ner/extract", { method: "POST", body: { text } }),
   relations: (text) =>
     request("/relations/extract", { method: "POST", body: { text } }),

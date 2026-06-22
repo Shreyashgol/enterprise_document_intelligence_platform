@@ -1,4 +1,9 @@
-"""API configuration (environment-driven)."""
+"""API configuration (environment-driven).
+
+``backend/.env`` is loaded once in ``app/__init__.py`` (so every entry point
+sees it); here we just read the resulting environment. Real environment
+variables always take precedence over the file.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +30,8 @@ class Settings:
     database_url: str | None = os.getenv("DATABASE_URL")
     # If set, the summary agent uses the Groq LLM; otherwise a template summary.
     groq_api_key: str | None = os.getenv("GROQ_API_KEY")
+    # Secret for signing session tokens. CHANGE THIS in production.
+    auth_secret: str = os.getenv("AUTH_SECRET", "dev-insecure-secret-change-me")
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
 

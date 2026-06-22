@@ -23,12 +23,14 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.config import settings
 from app.api import schemas as s
 from app.api.state import services
+from app.auth.users import UserExistsError, verify_password
+from app.auth.tokens import issue_token, verify_token
 from app.core.types import Entity
 from app.ingestion.extractors import (
     extract_text,
@@ -71,9 +73,58 @@ def health() -> s.HealthResponse:
         version=settings.version,
         indexed_documents=services.index.count(),
         graph_entities=services.kg.g.number_of_nodes(),
+        users=services.users.count(),
         tagger=services.tagger_name,
         llm=services.llm_name,
     )
+
+
+# --------------------------------------------------------------------------
+# Auth  (users persisted to the `users` table when DATABASE_URL is set)
+# --------------------------------------------------------------------------
+def _auth_response(user: dict) -> s.AuthResponse:
+    return s.AuthResponse(token=issue_token(user["email"]), user=s.UserOut(**user))
+
+
+@app.post("/auth/signup", response_model=s.AuthResponse, status_code=201)
+def signup(req: s.SignupRequest) -> s.AuthResponse:
+    try:
+        user = services.users.create_local(req.name, req.email, req.password)
+    except UserExistsError:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    logger.info("signup: %s", user["email"])
+    return _auth_response(user)
+
+
+@app.post("/auth/signin", response_model=s.AuthResponse)
+def signin(req: s.SigninRequest) -> s.AuthResponse:
+    record = services.users.get_record(req.email)
+    if (
+        not record
+        or record.get("provider") != "local"
+        or not verify_password(req.password, record.get("salt"), record.get("password_hash"))
+    ):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    return _auth_response(services.users.to_public(record))
+
+
+@app.post("/auth/google", response_model=s.AuthResponse)
+def auth_google(req: s.GoogleAuthRequest) -> s.AuthResponse:
+    user = services.users.upsert_oauth(req.name, req.email, req.picture, provider="google")
+    logger.info("google auth: %s", user["email"])
+    return _auth_response(user)
+
+
+@app.get("/auth/me", response_model=s.UserOut)
+def me(authorization: str | None = Header(default=None)) -> s.UserOut:
+    token = authorization.removeprefix("Bearer ").strip() if authorization else ""
+    email = verify_token(token)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    record = services.users.get_record(email)
+    if not record:
+        raise HTTPException(status_code=401, detail="User no longer exists.")
+    return s.UserOut(**services.users.to_public(record))
 
 
 # --------------------------------------------------------------------------

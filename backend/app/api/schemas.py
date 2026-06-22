@@ -7,9 +7,57 @@ etc.) but are the typed boundary between HTTP and the domain layer.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _valid_email(v: str) -> str:
+    v = v.strip().lower()
+    if not _EMAIL_RE.match(v):
+        raise ValueError("invalid email address")
+    return v
+
+
+# --- auth -----------------------------------------------------------------
+class SignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str
+    password: str = Field(min_length=6, max_length=200)
+
+    _ck_email = field_validator("email")(lambda cls, v: _valid_email(v))
+
+
+class SigninRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=1, max_length=200)
+
+    _ck_email = field_validator("email")(lambda cls, v: _valid_email(v))
+
+
+class GoogleAuthRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+
+    _ck_email = field_validator("email")(lambda cls, v: _valid_email(v))
+
+
+class UserOut(BaseModel):
+    id: str
+    name: str
+    email: str
+    provider: str
+    picture: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user: UserOut
 
 
 # --- shared ---------------------------------------------------------------
@@ -103,5 +151,6 @@ class HealthResponse(BaseModel):
     version: str
     indexed_documents: int
     graph_entities: int
+    users: int
     tagger: str
     llm: str

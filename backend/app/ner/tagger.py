@@ -111,7 +111,17 @@ class HybridTagger:
 
     def extract(self, text: str) -> list[Entity]:
         rule_ents = self.rules.extract(text)
+        occupied = [(e.start, e.end) for e in rule_ents]
+
+        def overlaps_rule(e: Entity) -> bool:
+            return any(e.start < r_end and r_start < e.end for r_start, r_end in occupied)
+
+        # Rules are authoritative for EMAIL/PHONE/DATE/MONEY *and their spans*:
+        # drop any model entity that is one of those types or overlaps a rule
+        # span, so a mis-merged model span can never swallow a structured entity.
         model_ents = [
-            e for e in self.model.extract(text) if e.label not in self._RULE_LABELS
+            e
+            for e in self.model.extract(text)
+            if e.label not in self._RULE_LABELS and not overlaps_rule(e)
         ]
         return _resolve_overlaps(rule_ents + model_ents)

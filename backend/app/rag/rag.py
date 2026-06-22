@@ -15,7 +15,7 @@ condition the answer on *those passages*. The pipeline:
   hashing embedder's blind spot (it's lexical, so a strong term match the
   cosine missed gets promoted). This is the classic *retrieve-broad,
   rerank-precise* two-stage pattern.
-* **generate** — hand the top passages to a `Generator` (extractive or Claude),
+* **generate** — hand the top passages to a `Generator` (extractive or Groq),
   which must answer *from the context only*.
 """
 

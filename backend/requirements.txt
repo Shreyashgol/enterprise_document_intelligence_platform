@@ -20,6 +20,9 @@ pgvector>=0.2
 # Phase 14 (RAG generation via Groq — Llama 3.3 70B):
 groq>=0.11
 
+# Loads backend/.env (GROQ_API_KEY, DATABASE_URL, …) automatically:
+python-dotenv>=1.0
+
 # Declared here for later phases (kept commented until their phase lands):
 # fastapi>=0.110
 # uvicorn>=0.29
