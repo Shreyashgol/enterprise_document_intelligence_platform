@@ -135,13 +135,19 @@ class InMemoryUserStore:
 
 # --- PostgreSQL -----------------------------------------------------------
 class PgUserStore:
+    """PostgreSQL user store.
+
+    Opens a **fresh connection per operation** so it survives serverless
+    Postgres (Neon) auto-suspending and closing idle connections — a persistent
+    connection would go stale and every later query would 500.
+    """
+
     def __init__(self, dsn: str, table: str = "users") -> None:
         import psycopg
 
-        self._psycopg = psycopg
+        self.dsn = dsn
         self.table = table
-        self._conn = psycopg.connect(dsn, autocommit=True)
-        with self._conn.cursor() as cur:
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
             cur.execute(
                 f"CREATE TABLE IF NOT EXISTS {table} ("
                 f"  id text PRIMARY KEY,"
@@ -159,25 +165,32 @@ class PgUserStore:
     def to_public(record: dict) -> dict:
         return _public(record)
 
+    def _connect(self):
+        import psycopg
+
+        return psycopg.connect(self.dsn, autocommit=True)
+
     def _fetch(self, email: str) -> Optional[dict]:
         from psycopg.rows import dict_row
 
-        with self._conn.cursor(row_factory=dict_row) as cur:
+        with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
             cur.execute(f"SELECT * FROM {self.table} WHERE email = %s", (email.strip().lower(),))
             return cur.fetchone()
 
     def create_local(self, name: str, email: str, password: str) -> dict:
+        import psycopg
+
         key = email.strip().lower()
         salt, ph = hash_password(password)
         uid = uuid.uuid4().hex
         try:
-            with self._conn.cursor() as cur:
+            with self._connect() as conn, conn.cursor() as cur:
                 cur.execute(
                     f"INSERT INTO {self.table} (id, name, email, password_hash, salt, provider) "
                     f"VALUES (%s, %s, %s, %s, %s, 'local')",
                     (uid, name.strip(), key, ph, salt),
                 )
-        except self._psycopg.errors.UniqueViolation:
+        except psycopg.errors.UniqueViolation:
             raise UserExistsError(key)
         return _public(self._fetch(key))
 
@@ -187,7 +200,7 @@ class PgUserStore:
     def upsert_oauth(self, name, email, picture, provider="google") -> dict:
         key = email.strip().lower()
         uid = uuid.uuid4().hex
-        with self._conn.cursor() as cur:
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 f"INSERT INTO {self.table} (id, name, email, provider, picture) "
                 f"VALUES (%s, %s, %s, %s, %s) "
@@ -198,9 +211,9 @@ class PgUserStore:
         return _public(self._fetch(key))
 
     def count(self) -> int:
-        with self._conn.cursor() as cur:
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM {self.table};")
             return int(cur.fetchone()[0])
 
     def close(self) -> None:
-        self._conn.close()
+        pass  # no persistent connection to close

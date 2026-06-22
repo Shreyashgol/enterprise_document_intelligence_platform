@@ -122,19 +122,24 @@ class PgVectorStore:
         );
 
     Search uses the cosine-distance operator ``<=>``; similarity = 1 − distance.
+
+    A **fresh connection is opened per operation** (via ``_connect``) rather than
+    holding one long-lived connection. This is essential for serverless Postgres
+    (e.g. Neon), which auto-suspends and closes idle connections — a persistent
+    connection would go stale and every later query would fail. The Neon
+    ``-pooler`` endpoint is built for exactly this short-connection pattern.
     """
 
     def __init__(self, dsn: str, dim: int, table: str = "document_embeddings") -> None:
         import psycopg
-        from pgvector.psycopg import register_vector
 
+        self.dsn = dsn
         self.dim = dim
         self.table = table
-        self._conn = psycopg.connect(dsn, autocommit=True)
-        with self._conn.cursor() as cur:
+        # Bootstrap with a plain connection (the vector type may not exist yet,
+        # so we can't register_vector until after CREATE EXTENSION).
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-        register_vector(self._conn)
-        with self._conn.cursor() as cur:
             cur.execute(
                 f"CREATE TABLE IF NOT EXISTS {self.table} ("
                 f"  doc_id text PRIMARY KEY,"
@@ -143,9 +148,17 @@ class PgVectorStore:
                 f");"
             )
 
+    def _connect(self):
+        import psycopg
+        from pgvector.psycopg import register_vector
+
+        conn = psycopg.connect(self.dsn, autocommit=True)
+        register_vector(conn)  # enables passing numpy arrays as vector params
+        return conn
+
     def add(self, doc_id: str, vector: np.ndarray, metadata: Optional[dict] = None) -> None:
         vec = _normalize(vector)
-        with self._conn.cursor() as cur:
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 f"INSERT INTO {self.table} (doc_id, embedding, metadata) "
                 f"VALUES (%s, %s, %s) "
@@ -160,7 +173,7 @@ class PgVectorStore:
 
     def similarity_search(self, query: np.ndarray, k: int = 5) -> list[SearchResult]:
         q = _normalize(query)
-        with self._conn.cursor() as cur:
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 f"SELECT doc_id, metadata, 1 - (embedding <=> %s) AS score "
                 f"FROM {self.table} ORDER BY embedding <=> %s LIMIT %s;",
@@ -173,13 +186,13 @@ class PgVectorStore:
         ]
 
     def count(self) -> int:
-        with self._conn.cursor() as cur:
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM {self.table};")
             return int(cur.fetchone()[0])
 
     def clear(self) -> None:
-        with self._conn.cursor() as cur:
+        with self._connect() as conn, conn.cursor() as cur:
             cur.execute(f"TRUNCATE {self.table};")
 
     def close(self) -> None:
-        self._conn.close()
+        pass  # no persistent connection to close

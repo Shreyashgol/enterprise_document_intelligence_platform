@@ -14,6 +14,16 @@ from app.auth.tokens import issue_token, verify_token
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_users(monkeypatch):
+    """Give each test a fresh in-memory user store so endpoint tests are
+    deterministic and don't depend on (or pollute) a real database, even when
+    DATABASE_URL is set in the environment."""
+    from app.api import state
+
+    monkeypatch.setattr(state.services, "users", InMemoryUserStore())
+
+
 # ---------------------------------------------------------------------------
 class TestPasswordHashing:
     def test_roundtrip(self):

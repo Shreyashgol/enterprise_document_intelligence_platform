@@ -177,7 +177,7 @@ class TestPgVectorStore:
             scores = [r.score for r in res]
             assert scores == sorted(scores, reverse=True)
         finally:
-            with store._conn.cursor() as cur:
+            with store._connect() as conn, conn.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {store.table};")
             store.close()
 
@@ -189,6 +189,6 @@ class TestPgVectorStore:
             store.add("x", e.embed("world"), {})
             assert store.count() == 1
         finally:
-            with store._conn.cursor() as cur:
+            with store._connect() as conn, conn.cursor() as cur:
                 cur.execute(f"DROP TABLE IF EXISTS {store.table};")
             store.close()
