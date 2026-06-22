@@ -63,9 +63,19 @@ def _entity_out(e: Entity) -> s.EntityOut:
 
 
 # --------------------------------------------------------------------------
-# health
+# liveness (no DB) — ideal for uptime monitors / keep-alive pings
 # --------------------------------------------------------------------------
-@app.get("/health", response_model=s.HealthResponse)
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+def root() -> dict:
+    # Cheap, dependency-free 200 — keeps the Render instance warm without
+    # querying Neon (so the database can still auto-suspend when idle).
+    return {"status": "ok", "service": settings.app_name, "docs": "/docs"}
+
+
+# --------------------------------------------------------------------------
+# health (full — touches the DB). Accepts HEAD so HEAD-based monitors get 200.
+# --------------------------------------------------------------------------
+@app.api_route("/health", methods=["GET", "HEAD"], response_model=s.HealthResponse)
 def health() -> s.HealthResponse:
     return s.HealthResponse(
         status="ok",

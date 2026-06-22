@@ -27,6 +27,15 @@ class TestHealth:
         assert body["status"] == "ok"
         assert "version" in body and "llm" in body
 
+    def test_root_liveness_get_and_head(self):
+        # DB-free liveness endpoint — must answer both GET and HEAD (uptime
+        # monitors often use HEAD; a GET-only route would 405).
+        assert client.get("/").status_code == 200
+        assert client.head("/").status_code == 200
+
+    def test_health_accepts_head(self):
+        assert client.head("/health").status_code == 200
+
 
 class TestNER:
     def test_extract(self):
