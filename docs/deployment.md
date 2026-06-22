@@ -43,8 +43,14 @@ Prerequisite: push this repo to **GitHub/GitLab**.
 |-----|-------|----------|
 | `PYTHON_VERSION` | `3.12.7` | yes |
 | `CORS_ORIGINS` | your Vercel URL, e.g. `https://your-app.vercel.app` | yes |
+| `AUTH_SECRET` | a random string (`openssl rand -hex 32`) — signs session tokens | yes (else an insecure default is used) |
 | `GROQ_API_KEY` | your Groq key | optional (LLM answers/summaries) |
-| `DATABASE_URL` | your Neon/Postgres + pgvector URL | optional (persistent search) |
+| `DATABASE_URL` | your Neon/Postgres + pgvector URL | optional (persistent search + `users` table) |
+
+> `AUTH_SECRET` is **not** an external credential — it's any random value you
+> choose. Losing it just logs everyone out (passwords/accounts are stored hashed
+> in the DB, unaffected). In `render.yaml` it's set to `generateValue: true`, so
+> Render creates a strong one automatically.
 
 > You won't know the Vercel URL until Part B. Put a placeholder now and **update
 > `CORS_ORIGINS` after the frontend is live** (a redeploy/restart applies it).
