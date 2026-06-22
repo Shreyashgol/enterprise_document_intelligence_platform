@@ -25,8 +25,19 @@ export default function App() {
     api.health().then(setHealth).catch(() => setHealth(null));
   }, []);
 
+  // Poll /health so the status badge self-heals after a Render free-tier cold
+  // start (the first request can take ~30-50s while the instance wakes), and
+  // re-check whenever the tab regains focus.
   useEffect(() => {
-    if (user) refresh();
+    if (!user) return;
+    refresh();
+    const id = setInterval(refresh, 20000);
+    const onFocus = () => refresh();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [refresh, user]);
 
   // Gate the whole app behind authentication.
