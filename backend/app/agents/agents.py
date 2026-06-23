@@ -54,7 +54,8 @@ class WorkflowState:
     relations: list[dict] = field(default_factory=list)
     validation: dict = field(default_factory=dict)
     summary: str = ""
-    trace: list[str] = field(default_factory=list)  # which agents ran
+    trace: list[str] = field(default_factory=list)   # agents that completed
+    errors: list[dict] = field(default_factory=list)  # {agent, error} per failure
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +65,7 @@ class WorkflowState:
             "validation": self.validation,
             "summary": self.summary,
             "trace": self.trace,
+            "errors": self.errors,
         }
 
 
@@ -118,6 +120,9 @@ class ValidationAgent:
 
     def run(self, state: WorkflowState) -> WorkflowState:
         issues: list[str] = []
+        # surface any upstream agent failures in the validation verdict
+        for err in state.errors:
+            issues.append(f"agent {err['agent']} failed: {err['error']}")
         n = len(state.text)
         for e in state.entities:
             if not (0 <= e.start < e.end <= n):
@@ -224,7 +229,19 @@ class DocumentAnalysisWorkflow:
         return self._drive(state)
 
     def _drive(self, state: WorkflowState) -> WorkflowState:
+        """Run agents in order, **isolating failures**.
+
+        If an agent raises, the error is recorded on the state (``errors``) and
+        the workflow continues with the remaining agents, so one failing step
+        (e.g. a missing file or a model error) yields a partial, auditable result
+        instead of losing all work. ``trace`` lists only the agents that
+        completed; ``ValidationAgent`` reflects recorded errors in its verdict.
+        """
         for agent in self.agents:
             logger.debug("running agent %s", agent.name)
-            state = agent.run(state)
+            try:
+                state = agent.run(state)
+            except Exception as exc:  # noqa: BLE001 - record and continue
+                logger.exception("agent %s failed", agent.name)
+                state.errors.append({"agent": agent.name, "error": str(exc)})
         return state

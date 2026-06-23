@@ -29,6 +29,9 @@ jobs:
           # CPU-only torch keeps the CI image small and fast.
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
+          # Optional extra: lets the Phase 7C/7D transformer tests run in CI
+          # (they importorskip otherwise). Render does NOT install this.
+          pip install -r requirements-transformers.txt
 
       - name: Run tests
         run: python -m pytest tests/ -q

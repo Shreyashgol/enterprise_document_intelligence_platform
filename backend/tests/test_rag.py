@@ -101,6 +101,34 @@ class TestAnswer:
         assert "contexts" in out
 
 
+class TestRelevanceGate:
+    def test_high_floor_abstains_generator_independent(self):
+        # an irrelevant question + a high floor drops every passage, so even a
+        # (stub) LLM generator never sees context and must abstain.
+        pipe = _pipeline(generator=GroqGenerator(client=_StubClient()))
+        out = pipe.answer("photosynthesis in plants", k=3, min_score=0.99)
+        assert out["contexts"] == []
+        assert out["answer"] == NO_ANSWER
+
+    def test_relevant_question_survives_floor(self):
+        out = _pipeline().answer("who did Acme sign a contract with", k=3,
+                                 min_score=0.05)
+        assert out["contexts"]  # a relevant passage clears the floor
+        assert "Globex" in out["answer"]
+
+    def test_default_floor_keeps_all_contexts(self):
+        # default min_score=0.0 -> no gating, behaviour unchanged
+        out = _pipeline().answer("invoice payment due", k=3)
+        assert len(out["contexts"]) == 3
+
+    def test_instance_floor_used_when_not_overridden(self):
+        idx = EmbeddingIndex(HashingEmbedder(dim=256), InMemoryVectorStore(256))
+        idx.index_many([(d, t, {}) for d, t in CORPUS])
+        pipe = RAGPipeline(idx, min_score=0.99)
+        out = pipe.answer("photosynthesis in plants", k=3)
+        assert out["contexts"] == [] and out["answer"] == NO_ANSWER
+
+
 # ---------------------------------------------------------------------------
 # Groq generator — prompt construction (no network) + live (gated)
 # ---------------------------------------------------------------------------

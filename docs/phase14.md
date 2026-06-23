@@ -64,6 +64,24 @@ wrong answer instead of "I don't know". The fix filters a `STOPWORDS` set from
 both questions and passages so overlap reflects **topical content words** only.
 The same tokenizer is shared by the generator and the reranker for consistency.
 
+## 4b. Relevance gate — abstaining on out-of-domain questions
+
+Stopword filtering stops the *extractive* generator from answering on a function-
+word coincidence, but that guard is specific to lexical overlap. A stronger,
+**generator-independent** guard is a relevance floor on the retrieval score: if
+no passage clears `min_score`, the context list is empty and *any* generator —
+extractive or Groq — returns "I don't know". Without it, an LLM generator is
+handed the top-k nearest-but-irrelevant passages and may answer over them.
+
+```python
+RAGPipeline(index, min_score=0.15)          # instance-wide floor
+pipe.answer("photosynthesis in plants", k=3, min_score=0.99)
+# -> contexts == [], answer == "I don't know based on the provided documents."
+```
+
+The floor is applied to the **final (post-rerank) score**; `min_score=0.0`
+(default) disables gating, preserving prior behaviour.
+
 ## 5. API
 
 ```python
@@ -74,11 +92,13 @@ pipe = RAGPipeline(embedding_index, generator=ExtractiveGenerator())  # or GroqG
 
 pipe.retrieve("invoice total", k=5)           # -> list[SearchResult]
 pipe.rerank("invoice total", results)         # -> reordered list[SearchResult]
-pipe.answer("what is the invoice total?", k=5)
+pipe.answer("what is the invoice total?", k=5, min_score=0.0)
 # -> {"question", "answer", "contexts": [{doc_id, score, text}], "generator"}
 ```
 
 Swap `GroqGenerator()` in for synthesized answers — everything else unchanged.
+The same `RAGPipeline` works over any Phase 13 embedder, including the contextual
+`TransformerEmbedder` (just build the `EmbeddingIndex` with it).
 
 ## 6. Example (extractive, offline)
 
@@ -107,8 +127,8 @@ Q: what is the invoice total
 | Path | Purpose |
 |------|---------|
 | `backend/app/rag/generator.py` | `Generator`, `ExtractiveGenerator`, `GroqGenerator` |
-| `backend/app/rag/rag.py` | `RAGPipeline` (`retrieve`/`rerank`/`answer`) |
-| `backend/tests/test_rag.py` | 16 tests (1 live-Groq, gated) |
+| `backend/app/rag/rag.py` | `RAGPipeline` (`retrieve`/`rerank`/`answer`, relevance gate) |
+| `backend/tests/test_rag.py` | 20 tests (1 live-Groq, gated) |
 
 ## 9. Running
 

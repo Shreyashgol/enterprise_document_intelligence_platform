@@ -29,6 +29,16 @@ every agent sees everything produced before it.
 Each appends its name to `state.trace`, so the final result records the exact
 path taken (`["document","ner","relation","validation","summary"]`).
 
+### Error isolation
+
+The orchestrator runs each agent inside a `try/except`: if one raises (a missing
+file, a model error), the failure is recorded on `state.errors` as
+`{agent, error}` and the workflow **continues** with the remaining agents. So a
+single broken step yields a partial, auditable result instead of losing all work.
+`trace` lists only the agents that *completed* (a failed agent is absent), and
+`ValidationAgent` folds any recorded errors into its `issues`/`is_valid` verdict —
+so the failure shows up in the structured output, not just the logs.
+
 ### ValidationAgent
 
 Non-fatal integrity checks that catch a broken pipeline before it reaches a user:
@@ -58,7 +68,7 @@ state = wf.run_file("contract.pdf")        # or wf.run_text("...", source="doc1"
 # full power: model tagger + Groq summary
 wf = DocumentAnalysisWorkflow(tagger=hybrid_tagger, summary_generator=GroqGenerator())
 state.to_dict()
-# -> {"source", "entities", "relations", "validation", "summary", "trace"}
+# -> {"source", "entities", "relations", "validation", "summary", "trace", "errors"}
 ```
 
 Tagger, relation extractor, and summary generator are all **injected**, so the
@@ -100,7 +110,7 @@ Swap in `GroqGenerator()` and the summary becomes a fluent LLM paragraph instead
 | Path | Purpose |
 |------|---------|
 | `backend/app/agents/agents.py` | `WorkflowState`, the 5 agents, `DocumentAnalysisWorkflow` |
-| `backend/tests/test_agents.py` | 14 tests (1 live-Groq, gated) |
+| `backend/tests/test_agents.py` | 17 tests (incl. error isolation; 1 live-Groq, gated) |
 
 ## 7. Running
 

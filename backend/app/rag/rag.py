@@ -43,10 +43,15 @@ class RAGPipeline:
         index: EmbeddingIndex,
         generator: Optional[Generator] = None,
         rerank_alpha: float = 0.5,
+        min_score: float = 0.0,
     ) -> None:
         self.index = index
         self.generator = generator or ExtractiveGenerator()
         self.rerank_alpha = rerank_alpha  # weight on embedding vs lexical
+        # relevance floor on the final (post-rerank) score: results below it are
+        # dropped, so the pipeline can abstain rather than ground on irrelevant
+        # passages. 0.0 = no gating (default).
+        self.min_score = min_score
 
     def retrieve(self, question: str, k: int = 5) -> list[SearchResult]:
         """Stage 1: vector nearest-neighbor search."""
@@ -71,8 +76,19 @@ class RAGPipeline:
         reranked.sort(key=lambda r: -r.score)
         return reranked
 
-    def answer(self, question: str, k: int = 5, rerank: bool = True) -> dict:
+    def answer(
+        self,
+        question: str,
+        k: int = 5,
+        rerank: bool = True,
+        min_score: Optional[float] = None,
+    ) -> dict:
         """Full pipeline. Returns answer + the contexts it was grounded on.
+
+        ``min_score`` overrides the instance relevance floor for this call;
+        passages scoring below it are dropped before generation, so an
+        out-of-domain question yields an empty context (and the generator's
+        "I don't know") instead of a confident answer over irrelevant text.
 
         Result::
 
@@ -83,9 +99,12 @@ class RAGPipeline:
               "generator": str,
             }
         """
+        floor = self.min_score if min_score is None else min_score
         results = self.retrieve(question, k)
         if rerank:
             results = self.rerank(question, results)
+        if floor > 0.0:
+            results = [r for r in results if r.score >= floor]
         contexts = [r.metadata.get("text", "") for r in results]
         answer = self.generator.generate(question, contexts)
         return {

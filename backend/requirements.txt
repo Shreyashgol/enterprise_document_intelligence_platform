@@ -6,9 +6,11 @@ pytest>=8.0
 torch>=2.2
 numpy>=1.26
 
-# Phase 7C/7D (pretrained encoder weights + fast tokenizer only — the NER head
-# and CRF stay our own code; no prebuilt NER framework):
-transformers>=4.40
+# Phase 7C/7D (BERT / BERT-CRF) need `transformers` — installed separately via
+# requirements-transformers.txt. It is intentionally NOT a hard dependency here:
+# the deployed service trains/serves the from-scratch BiLSTM tagger (the encoder
+# imports are lazy), so the free-tier build stays lean. Install the extra only to
+# train or serve the transformer models.
 
 # Phase 10 (document ingestion):
 pypdf>=6.0

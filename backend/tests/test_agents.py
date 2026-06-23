@@ -164,6 +164,41 @@ class TestWorkflow:
         assert {"MONEY", "EMAIL", "DATE"} <= labels
         assert out["trace"][0] == "document"
 
+    def test_failing_agent_is_isolated(self):
+        # a tagger that raises must not crash the workflow; the error is
+        # recorded and the remaining agents still run.
+        class BoomTagger:
+            name = "boom"
+            def extract(self, text):
+                raise RuntimeError("model exploded")
+
+        wf = DocumentAnalysisWorkflow(tagger=BoomTagger())
+        state = wf.run_text("John works at OpenAI", source="doc1")
+
+        assert state.errors == [{"agent": "ner", "error": "model exploded"}]
+        # ner did not complete; document + the downstream agents did
+        assert "ner" not in state.trace
+        assert state.trace == ["document", "relation", "validation", "summary"]
+        # validation surfaces the failure in its verdict
+        assert state.validation["is_valid"] is False
+        assert any("ner failed" in i for i in state.validation["issues"])
+        # a (partial) summary is still produced
+        assert state.summary
+
+    def test_errors_in_to_dict(self):
+        class BoomTagger:
+            name = "boom"
+            def extract(self, text):
+                raise ValueError("bad")
+
+        out = DocumentAnalysisWorkflow(tagger=BoomTagger()).run_text("x").to_dict()
+        assert out["errors"] == [{"agent": "ner", "error": "bad"}]
+
+    def test_missing_file_is_captured_not_raised(self):
+        out = DocumentAnalysisWorkflow().run_file("/no/such/file.txt").to_dict()
+        assert out["errors"] and out["errors"][0]["agent"] == "document"
+        assert "document" not in out["trace"]
+
     @pytest.mark.skipif(not os.getenv("GROQ_API_KEY"), reason="no GROQ_API_KEY")
     def test_workflow_with_live_groq_summary(self):
         from app.rag.generator import GroqGenerator

@@ -32,6 +32,13 @@ Prerequisite: push this repo to **GitHub/GitLab**.
      > CPU-only torch keeps the build within free-tier limits. The final
      > `train_ner` bakes the NER model so the API serves the **hybrid** tagger.
      > Drop it to ship rules-only (lighter, faster build).
+     >
+     > **Do not add `requirements-transformers.txt` here.** The deployed service
+     > trains/serves the from-scratch BiLSTM tagger and never imports
+     > `transformers` (the 7C/7D encoder imports are lazy). Installing it would
+     > bloat the free-tier build for no runtime benefit. It's only needed to
+     > train/serve the BERT models locally (`pip install -r requirements.txt -r
+     > requirements-transformers.txt`).
    - **Start Command:**
      ```
      uvicorn app.api.main:app --host 0.0.0.0 --port $PORT

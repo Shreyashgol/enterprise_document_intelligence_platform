@@ -5,6 +5,7 @@ import AnalyzePanel from "./components/AnalyzePanel";
 import UploadPanel from "./components/UploadPanel";
 import SearchPanel from "./components/SearchPanel";
 import GraphPanel from "./components/GraphPanel";
+import ModelsPanel from "./components/ModelsPanel";
 import AuthScreen from "./components/AuthScreen";
 import ThemeToggle from "./components/ThemeToggle";
 import UserMenu from "./components/UserMenu";
@@ -15,6 +16,7 @@ const TABS = [
   { id: "upload", label: "Upload" },
   { id: "search", label: "Search" },
   { id: "graph", label: "Graph" },
+  { id: "models", label: "Models" },
 ];
 
 export default function App() {
@@ -108,11 +110,13 @@ export default function App() {
         {tab === "upload" && <UploadPanel onIndexed={refresh} />}
         {tab === "search" && <SearchPanel />}
         {tab === "graph" && <GraphPanel />}
+        {tab === "models" && <ModelsPanel />}
       </main>
 
       <footer className="mx-auto max-w-6xl px-6 pb-8 text-center text-xs text-slate-400">
-        Built from first principles — custom tokenizer, BiLSTM NER, relation
-        extraction, NetworkX graph, pgvector RAG, Groq Llama 3.3.
+        Built from first principles — custom tokenizer, a four-model NER ladder
+        (BiLSTM · BiLSTM-CRF · BERT · BERT-CRF), relation extraction, NetworkX
+        graph, pgvector RAG, Groq Llama 3.3.
       </footer>
 
       <HelpModal open={showHelp} onClose={() => setShowHelp(false)} />

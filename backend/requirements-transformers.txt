@@ -1,0 +1,12 @@
+# Optional extra — Phase 7C/7D transformer models (BERT, BERT-CRF).
+#
+# The base requirements.txt deliberately omits this so the free-tier deploy stays
+# small; the BiLSTM ladder (7A/7B), training, evaluation, ingestion, relations,
+# graph, embeddings, RAG and agents all run without it. Install this only to
+# train or serve the encoder-based models:
+#
+#     pip install -r requirements.txt -r requirements-transformers.txt
+#
+# Per the project constraints, transformers is used for pretrained encoder
+# weights + tokenizer only — the classification head, CRF and alignment are ours.
+transformers>=4.40
