@@ -75,13 +75,23 @@ class Relation:
 
 @dataclass
 class RelationPattern:
-    """A typed relation template: source/target types + a trigger regex."""
+    """A typed relation template: source/target types + a trigger regex.
+
+    ``trigger`` matches the **forward** construction ``SOURCE … trigger … TARGET``.
+    ``reverse_trigger`` (optional) matches the **passive/appositive** construction
+    where the relation flows right-to-left — ``TARGET … reverse_trigger … SOURCE``
+    (e.g. "Globex, *led by* Jane Doe", "San Francisco*-based* OpenAI"). When it
+    fires, the endpoints are swapped so the emitted triple keeps the relation's
+    canonical direction. The same type and locality guards apply in both senses,
+    so reverse matching adds recall without sacrificing precision.
+    """
 
     relation: str
     source_types: frozenset[str]
     target_types: frozenset[str]
     trigger: re.Pattern
     max_gap: int = 80
+    reverse_trigger: Optional[re.Pattern] = None
 
 
 def _t(pattern: str) -> re.Pattern:
@@ -111,12 +121,18 @@ RELATION_PATTERNS: list[RelationPattern] = [
         frozenset({"ORG"}),
         _t(r"\bworks?\s+(for|at)\b|\bemployed\s+(by|at)\b|\bjoined\b"
            r"|\b(ceo|cto|cfo|coo|founder|co-founder|engineer|manager|director|vp|president|head)\b[^.]*\b(of|at)\b"),
+        # reverse: "Globex, led by Jane Doe" -> (Jane Doe, works_for, Globex)
+        reverse_trigger=_t(r"\b(led|headed|run|founded|co-founded|managed)\s+by\b"),
     ),
     RelationPattern(
         "owns",
         frozenset({"PERSON", "ORG"}),
         frozenset({"ORG", "PRODUCT"}),
-        _t(r"\bowns?\b|\bowned\b|\bacquired\b|\bacquires\b|\bholds?\b[^.]*\bstake\b"),
+        # active voice only — the passive "owned/acquired by" is the reverse form
+        _t(r"\bowns?\b|\bowned\b(?!\s+by)|\bacquired\b(?!\s+by)|\bacquires\b"
+           r"|\bholds?\b[^.]*\bstake\b"),
+        # reverse: "Globex, owned by Acme" -> (Acme, owns, Globex)
+        reverse_trigger=_t(r"\b(owned|acquired)\s+by\b"),
     ),
     RelationPattern(
         "located_in",
@@ -124,6 +140,8 @@ RELATION_PATTERNS: list[RelationPattern] = [
         frozenset({"LOCATION"}),
         _t(r"\b(located|based|headquartered)\s+in\b|\blives?\s+in\b"
            r"|\bresides?\s+in\b|\bin\b"),
+        # reverse: "San Francisco-based OpenAI" -> (OpenAI, located_in, San Francisco)
+        reverse_trigger=_t(r"-based\b"),
     ),
 ]
 
@@ -164,31 +182,52 @@ class RelationExtractor:
 
     def _match_pair(
         self,
-        src: Entity,
-        tgt: Entity,
+        e1: Entity,
+        e2: Entity,
         gap: str,
         between_labels: frozenset[str] | set[str] = frozenset(),
     ) -> Optional[Relation]:
+        """Match the text-order pair (``e1`` precedes ``e2``) against each pattern.
+
+        Each pattern is tried **forward** (``e1`` = source, ``e2`` = target) and,
+        if it defines a ``reverse_trigger``, **reverse** (``e2`` = source,
+        ``e1`` = target). First match wins, preserving pattern priority order.
+        """
         for pat in self.patterns:
-            # Locality: if another entity between src and tgt is itself a valid
+            # Locality: if another entity between e1 and e2 is itself a valid
             # endpoint of this relation, the trigger binds to the closer one.
             if between_labels & (pat.source_types | pat.target_types):
                 continue
+            if len(gap) > pat.max_gap:
+                continue
+
+            # forward: e1 … trigger … e2  (e1=source, e2=target)
             if (
-                src.label in pat.source_types
-                and tgt.label in pat.target_types
-                and len(gap) <= pat.max_gap
-                and pat.trigger.search(gap)
+                e1.label in pat.source_types
+                and e2.label in pat.target_types
+                and (m := pat.trigger.search(gap))
             ):
-                m = pat.trigger.search(gap)
-                return Relation(
-                    source=src.text,
-                    relation=pat.relation,
-                    target=tgt.text,
-                    source_label=src.label,
-                    target_label=tgt.label,
-                    source_span=(src.start, src.end),
-                    target_span=(tgt.start, tgt.end),
-                    trigger=m.group(0).strip() if m else "",
-                )
+                return self._make(pat.relation, e1, e2, m.group(0).strip())
+
+            # reverse: e1 … reverse_trigger … e2  (e2=source, e1=target)
+            if (
+                pat.reverse_trigger is not None
+                and e2.label in pat.source_types
+                and e1.label in pat.target_types
+                and (m := pat.reverse_trigger.search(gap))
+            ):
+                return self._make(pat.relation, e2, e1, m.group(0).strip())
         return None
+
+    @staticmethod
+    def _make(relation: str, src: Entity, tgt: Entity, trigger: str) -> Relation:
+        return Relation(
+            source=src.text,
+            relation=relation,
+            target=tgt.text,
+            source_label=src.label,
+            target_label=tgt.label,
+            source_span=(src.start, src.end),
+            target_span=(tgt.start, tgt.end),
+            trigger=trigger,
+        )

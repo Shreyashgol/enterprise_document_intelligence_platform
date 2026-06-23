@@ -162,6 +162,39 @@ class TestIngest:
         assert kg.query_graph(source="John Smith", relation="works_for")[0]["target"] == "OpenAI"
         assert kg.query_graph(relation="located_in")[0]["target"] == "San Francisco"
 
+    def test_ingest_full_dict_records_trigger(self):
+        # the richer Phase 11 form (to_dict_full) carries trigger + labels
+        kg = KnowledgeGraph()
+        kg.ingest(
+            [E("John", "PERSON"), E("OpenAI", "ORG")],
+            [{"source": "John", "relation": "works_for", "target": "OpenAI",
+              "source_label": "PERSON", "target_label": "ORG", "trigger": "works at"}],
+            doc_id="d1",
+        )
+        edge = kg.query_graph(relation="works_for", full=True)[0]
+        assert edge["triggers"] == ["works at"]
+
+    def test_ingest_label_disambiguates_endpoint(self):
+        # "Apple" exists as both ORG and PRODUCT; the relation's target_label
+        # must pin the edge to the ORG node, not pick arbitrarily.
+        kg = KnowledgeGraph()
+        kg.ingest(
+            [E("Tim", "PERSON"), E("Apple", "ORG"), E("Apple", "PRODUCT")],
+            [{"source": "Tim", "relation": "works_for", "target": "Apple",
+              "source_label": "PERSON", "target_label": "ORG"}],
+        )
+        res = kg.query_graph(relation="works_for", full=True)[0]
+        assert res["target_id"] == "ORG::apple"
+
+    def test_ingest_minimal_dict_still_works(self):
+        # backward compatibility: bare {source,relation,target} ingests unchanged
+        kg = KnowledgeGraph()
+        kg.ingest(
+            [E("A", "ORG"), E("B", "ORG")],
+            [{"source": "A", "relation": "owns", "target": "B"}],
+        )
+        assert kg.query_graph(relation="owns")[0]["target"] == "B"
+
     def test_cross_document_merge(self):
         kg = KnowledgeGraph()
         kg.add_relation(E("John", "PERSON"), "works_for", E("OpenAI", "ORG"), doc_id="d1")

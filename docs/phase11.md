@@ -101,24 +101,44 @@ DocumentPipeline(tagger=model_or_hybrid_tagger).process(path).to_dict()
 output — the rule-only tagger finds EMAIL/PHONE/DATE/MONEY, which rarely form
 these relations.
 
-## 7. Design notes & limitations
+## 7. Reverse-direction (passive / appositive) triggers
 
-- **Forward-direction only** (`source … trigger … target`); constructions like
-  "OpenAI, where John works" aren't captured — a documented baseline limitation.
+Many real relations read **right-to-left** — the target precedes the source.
+Each pattern may declare a `reverse_trigger`; when it fires in the gap, the
+endpoints are **swapped** so the emitted triple keeps the relation's canonical
+direction. The same type + locality guards apply, so this adds recall without
+costing precision.
+
+| Relation | Reverse construction | Triple |
+|----------|----------------------|--------|
+| `works_for` | "Globex, **led by** Jane Doe" / "OpenAI was **founded by** Sam Altman" | (Jane Doe, works_for, Globex) |
+| `owns` | "Globex is **owned by** Acme" | (Acme, owns, Globex) |
+| `located_in` | "San Francisco**-based** OpenAI" | (OpenAI, located_in, San Francisco) |
+
+The forward `owns` trigger uses a negative lookahead so **active** "owned"
+("Acme owned Globex") still matches forward, while **passive** "owned by" routes
+to the reverse handler.
+
+## 8. Design notes & limitations
+
+- **Still trigger-anchored**: a relation needs an explicit forward *or* reverse
+  trigger in the gap between the pair. Relative clauses where the trigger sits
+  outside the pair ("OpenAI, **where** John **works**") remain out of scope for
+  the rule baseline.
 - **Precision-first**: the locality guards favor precision over recall, the
   right tradeoff for a rule baseline feeding a knowledge graph.
 - A learned relation classifier can later replace/augment the patterns behind
   the same `RelationExtractor.extract` interface.
 
-## 8. Files
+## 9. Files
 
 | Path | Purpose |
 |------|---------|
-| `backend/app/relation_extraction/extractor.py` | `RelationExtractor`, `Relation`, `RelationPattern` |
+| `backend/app/relation_extraction/extractor.py` | `RelationExtractor`, `Relation`, `RelationPattern` (forward + reverse triggers) |
 | `backend/app/ingestion/pipeline.py` | relations wired into the pipeline |
-| `backend/tests/test_relations.py` | 18 tests |
+| `backend/tests/test_relations.py` | 24 tests |
 
-## 9. Running
+## 10. Running
 
 ```bash
 cd backend && source .venv/bin/activate

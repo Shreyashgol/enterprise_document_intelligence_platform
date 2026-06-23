@@ -36,11 +36,22 @@ entities are found:
 | Tagger | Backed by | Best for |
 |--------|-----------|----------|
 | `RuleBasedTagger` | Phase 1 regex | EMAIL/PHONE/DATE/MONEY — no model needed |
-| `ModelTagger` | trained Phase 7 model + vocabs + tokenizer | PERSON/ORG/LOCATION/PRODUCT |
-| `HybridTagger` | both | rules win on the 4 structured types, model owns the rest |
+| `ModelTagger` | trained **word-level** model (7A `bilstm` / 7B `bilstm_crf`) + vocabs + tokenizer | PERSON/ORG/LOCATION/PRODUCT |
+| `BertTagger` | trained **transformer** model (7C `bert` / 7D `bert_crf`) + fast tokenizer | PERSON/ORG/LOCATION/PRODUCT |
+| `HybridTagger` | rules + any model tagger | rules win on the 4 structured types, model owns the rest |
 
-`ModelTagger` runs the full inference path: `text → tokenize → encode →
-model.predict → decode tags → convert_bio_to_entities` (reusing Phases 3/4/5/7).
+Every ladder model can serve, and **each decodes through the same path it was
+trained/evaluated on** — argmax for the linear heads, Viterbi (`model.decode`)
+for the CRFs — so serving never diverges from the Phase 8/9 numbers:
+
+- `ModelTagger`: `text → tokenize → encode → predict/decode → tags → entities`,
+  auto-detecting `bilstm` vs `bilstm_crf` from the checkpoint's weights.
+- `BertTagger`: `text → tokenize (offsets) → subword-tokenize → encoder →
+  gather first-subword preds → word-level tags → entities`, reusing the Phase 7C
+  alignment helpers; it auto-detects `bert` vs `bert_crf`.
+
+Predicted tags are sanitised (any non-BIO id, e.g. a stray `<PAD>`, maps to `O`)
+so a poorly-trained model can never produce a malformed sequence at serve time.
 The pipeline **defaults to `RuleBasedTagger`** so it runs with zero trained
 model; swap in a model tagger once a checkpoint exists.
 
@@ -95,7 +106,7 @@ Output entities (rule tagger):
 | Path | Purpose |
 |------|---------|
 | `backend/app/ingestion/extractors.py` | `extract_text` + per-format extractors |
-| `backend/app/ner/tagger.py` | `Tagger`, `RuleBasedTagger`, `ModelTagger`, `HybridTagger` |
+| `backend/app/ner/tagger.py` | `Tagger`, `RuleBasedTagger`, `ModelTagger`, `BertTagger`, `HybridTagger` |
 | `backend/app/ingestion/pipeline.py` | `DocumentPipeline`, `DocumentAnalysis` |
 | `backend/tests/test_ingestion.py` | 19 tests |
 | `backend/tests/doc_fixtures.py` | in-process PDF/DOCX/EML synthesizers |

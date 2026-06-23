@@ -1,4 +1,23 @@
-# Phase 7 — First NER Model
+# Phase 7 — NER Models
+
+Phase 7 defines a **ladder of four NER models** of increasing capability. They
+share the same task, label set, and (from 7B onward) the same CRF decoder, so a
+single training pipeline (Phase 8) fits them and Phase 9 compares them
+head-to-head.
+
+| Sub-phase | Architecture | Files | Status |
+|-----------|--------------|-------|--------|
+| **7A** | `Embedding → BiLSTM → Linear` | `ner/model.py` | ✅ shipped (this doc) |
+| **7B** | `Embedding → BiLSTM → CRF` | `ner/crf.py`, `ner/bilstm_crf.py` | ✅ shipped — [phase7b.md](phase7b.md) |
+| **7C** | `Encoder → Linear` | `ner/bert_ner.py`, `ner/decode.py` | ✅ shipped — [phase7c.md](phase7c.md) |
+| **7D** | `Encoder → CRF` (reuses `crf.py`) | `ner/bert_crf.py` | ✅ shipped — [phase7d.md](phase7d.md) |
+
+> Why a ladder, not one model? Each rung isolates one variable — adding global
+> tag-transition modelling (CRF), then swapping from-scratch embeddings for a
+> pretrained encoder — so the Phase 9 comparison attributes every F1 delta to a
+> single, explainable change.
+
+This document covers **Phase 7A**, the baseline tagger.
 
 ## 1. Theory
 
@@ -30,7 +49,9 @@ A shared linear layer projects each `2·hidden` vector to `num_tags` scores
 ### Why no CRF yet?
 A CRF models tag→tag transitions (banning impossible sequences like
 `O → I-PERSON`) and helps measurably, but complicates the baseline. We ship the
-standard **BiLSTM-softmax** tagger first; a CRF head is a clean later upgrade.
+standard **BiLSTM-softmax** tagger first to establish a baseline F1 and validate
+the data pipeline end-to-end; the CRF head is added in **Phase 7B**
+([phase7b.md](phase7b.md)) and reused unchanged by the transformer model in 7D.
 
 ## 2. Configuration
 
@@ -92,7 +113,7 @@ arch:   Embedding(31,128) → BiLSTM(128,128) → Linear(256,18)
 preds (untrained): ['I-DATE','I-DATE','I-PHONE','B-PERSON', ...]   # random — expected
 ```
 
-An untrained model emits noise; the point of Phase 7 is a **correct, trainable**
+An untrained model emits noise; the point of Phase 7A is a **correct, trainable**
 forward/backward path (gradients verified to flow). Learning happens in Phase 8.
 
 ## 7. Design notes

@@ -151,14 +151,22 @@ class KnowledgeGraph:
                doc_id: Optional[str] = None) -> None:
         """Load all entities + relation triples from a processed document.
 
-        ``relations`` are ``{"source","relation","target"}`` dicts (Phase 11
-        contract). Endpoints are resolved against the entities just added.
+        ``relations`` are at least ``{"source","relation","target"}`` dicts
+        (Phase 11 contract); endpoints are resolved against the entities just
+        added. If the **richer** Phase 11 form (`to_dict_full`) is supplied, the
+        ``source_label``/``target_label`` disambiguate same-surface entities of
+        different types and ``trigger`` is recorded as edge provenance. Both keys
+        are optional, so minimal triples still ingest unchanged.
         """
-        added = [self.add_entity(e, doc_id=doc_id) for e in entities]  # noqa: F841
+        for e in entities:
+            self.add_entity(e, doc_id=doc_id)
         for rel in relations:
             try:
                 self.add_relation(
-                    rel["source"], rel["relation"], rel["target"], doc_id=doc_id
+                    rel["source"], rel["relation"], rel["target"], doc_id=doc_id,
+                    trigger=rel.get("trigger", ""),
+                    source_label=rel.get("source_label"),
+                    target_label=rel.get("target_label"),
                 )
             except KeyError:
                 # endpoint surface not among recognized entities; skip safely

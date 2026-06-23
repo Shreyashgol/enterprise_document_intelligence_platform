@@ -61,6 +61,47 @@ class TestRelationTypes:
         assert ("Acme", "owns", "Globex") in _triples(rels)
 
 
+class TestReverseDirection:
+    """Passive/appositive constructions where the relation flows right-to-left."""
+
+    def test_works_for_led_by(self):
+        text = "Globex, led by Jane Doe, grew fast"
+        ents = _spans(text, ("Globex", "ORG"), ("Jane Doe", "PERSON"))
+        rels = RelationExtractor().extract(text, ents)
+        assert ("Jane Doe", "works_for", "Globex") in _triples(rels)
+
+    def test_works_for_founded_by(self):
+        text = "OpenAI was founded by Sam Altman"
+        ents = _spans(text, ("OpenAI", "ORG"), ("Sam Altman", "PERSON"))
+        rels = RelationExtractor().extract(text, ents)
+        assert ("Sam Altman", "works_for", "OpenAI") in _triples(rels)
+
+    def test_owns_owned_by(self):
+        text = "Globex is owned by Acme"
+        ents = _spans(text, ("Globex", "ORG"), ("Acme", "ORG"))
+        rels = RelationExtractor().extract(text, ents)
+        assert ("Acme", "owns", "Globex") in _triples(rels)
+
+    def test_located_in_x_based(self):
+        text = "San Francisco-based OpenAI shipped it"
+        ents = _spans(text, ("San Francisco", "LOCATION"), ("OpenAI", "ORG"))
+        rels = RelationExtractor().extract(text, ents)
+        assert ("OpenAI", "located_in", "San Francisco") in _triples(rels)
+
+    def test_reverse_respects_types(self):
+        # "led by" needs ORG(target) before PERSON(source); two ORGs must not match works_for
+        text = "Globex, led by Initech"
+        ents = _spans(text, ("Globex", "ORG"), ("Initech", "ORG"))
+        rels = RelationExtractor().extract(text, ents)
+        assert all(r.relation != "works_for" for r in rels)
+
+    def test_reverse_needs_trigger(self):
+        text = "Globex, a partner of Jane Doe"  # no reverse trigger
+        ents = _spans(text, ("Globex", "ORG"), ("Jane Doe", "PERSON"))
+        rels = RelationExtractor().extract(text, ents)
+        assert all(r.relation != "works_for" for r in rels)
+
+
 class TestConstraints:
     def test_no_relation_without_trigger(self):
         text = "John Smith and OpenAI"

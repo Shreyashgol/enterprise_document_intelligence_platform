@@ -149,24 +149,31 @@ def collect_predictions(
     tag_vocab: Vocabulary,
     device: Optional[Union[str, "object"]] = None,
 ) -> tuple[list[list[str]], list[list[str]]]:
-    """Run the model over a loader → (gold_tag_seqs, pred_tag_seqs)."""
+    """Run any ladder model over a loader → (gold_tag_seqs, pred_tag_seqs).
+
+    Family-agnostic: it reuses the Phase 8 training adapters
+    (:func:`app.ner.train._select_adapter`) to turn each batch into **word-level**
+    (pred, gold) tag-id sequences — argmax for the linear heads, Viterbi for the
+    CRFs, subwords mapped back to words for the transformer models. This is the
+    same decoding path the trainer scores on, so eval and training never diverge,
+    and every model is reported on the same word-level footing.
+    """
     import torch
     from app.ner.model import get_device
+    from app.ner.train import _select_adapter
 
     dev = get_device(device) if not hasattr(device, "type") else device
     model.to(dev).eval()
+    adapter = _select_adapter(model, tag_vocab, dev)
+
     gold_seqs: list[list[str]] = []
     pred_seqs: list[list[str]] = []
     with torch.no_grad():
         for batch in loader:
-            input_ids = batch["input_ids"].to(dev)
-            mask = batch["mask"].to(dev)
-            lengths = batch["lengths"].tolist()
-            preds = model(input_ids, mask=mask).argmax(-1).cpu()
-            gold = batch["labels"].cpu()
-            for i, n in enumerate(lengths):
-                gold_seqs.append(tag_vocab.decode_sequence(gold[i, :n].tolist()))
-                pred_seqs.append(tag_vocab.decode_sequence(preds[i, :n].tolist()))
+            preds, gold = adapter.predict_and_gold(batch)
+            for p, g in zip(preds, gold):
+                pred_seqs.append(tag_vocab.decode_sequence(p))
+                gold_seqs.append(tag_vocab.decode_sequence(g))
     return gold_seqs, pred_seqs
 
 
@@ -189,4 +196,98 @@ def save_report(
     md_path = out_dir / f"{name}.md"
     json_path.write_text(json.dumps(report.to_dict(), indent=2), encoding="utf-8")
     md_path.write_text(report.to_markdown(), encoding="utf-8")
+    return {"json": str(json_path), "markdown": str(md_path)}
+
+
+# ---------------------------------------------------------------------------
+# Four-way model comparison (the Phase 9 headline artifact)
+# ---------------------------------------------------------------------------
+# Canonical display names + order for the ladder, so the comparison reads as the
+# intended progression: each row adds exactly one capability over the row above.
+LADDER_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("bilstm", "BiLSTM"),
+    ("bilstm_crf", "BiLSTM + CRF"),
+    ("bert", "BERT"),
+    ("bert_crf", "BERT + CRF"),
+)
+
+
+@dataclass
+class ModelComparison:
+    """An ordered table of models scored on the **same** test split.
+
+    ``rows`` are dicts ``{name, precision, recall, f1, delta}`` in ladder order;
+    ``delta`` is the F1 gain over the previous row (``None`` for the first).
+    """
+
+    rows: list[dict]
+    analysis: str = ""
+    created_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    def to_dict(self) -> dict:
+        return {"created_at": self.created_at, "rows": self.rows, "analysis": self.analysis}
+
+    def to_markdown(self) -> str:
+        lines = [
+            "# NER Model Comparison",
+            "",
+            f"- generated: `{self.created_at}`",
+            "- all models scored on the **same held-out test split** "
+            "(entity-level micro P/R/F1)",
+            "",
+            "| Model | Precision | Recall | F1 | Δ vs prev |",
+            "|-------|----------:|-------:|---:|----------:|",
+        ]
+        for r in self.rows:
+            delta = "—" if r["delta"] is None else f"{r['delta']:+.3f}"
+            lines.append(
+                f"| {r['name']} | {r['precision']:.3f} | {r['recall']:.3f} "
+                f"| {r['f1']:.3f} | {delta} |"
+            )
+        if self.analysis:
+            lines += ["", "## Analysis", "", self.analysis]
+        lines.append("")
+        return "\n".join(lines)
+
+
+def compare_models(
+    named_reports: Sequence[tuple[str, EvaluationReport]],
+    analysis: str = "",
+) -> ModelComparison:
+    """Build the comparison table from ``(display_name, report)`` pairs.
+
+    The ``Δ vs prev`` column is each row's F1 minus the previous row's F1, so the
+    table reads as the ladder's incremental gains.
+    """
+    rows: list[dict] = []
+    prev_f1: Optional[float] = None
+    for name, report in named_reports:
+        f1 = report.micro.f1
+        rows.append(
+            {
+                "name": name,
+                "precision": report.micro.precision,
+                "recall": report.micro.recall,
+                "f1": f1,
+                "delta": None if prev_f1 is None else f1 - prev_f1,
+            }
+        )
+        prev_f1 = f1
+    return ModelComparison(rows=rows, analysis=analysis)
+
+
+def save_comparison(
+    comparison: ModelComparison,
+    out_dir: Union[str, Path] = "evaluation/reports",
+    name: str = "comparison",
+) -> dict:
+    """Write ``<name>.json`` and ``<name>.md`` for a `ModelComparison`."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / f"{name}.json"
+    md_path = out_dir / f"{name}.md"
+    json_path.write_text(json.dumps(comparison.to_dict(), indent=2), encoding="utf-8")
+    md_path.write_text(comparison.to_markdown(), encoding="utf-8")
     return {"json": str(json_path), "markdown": str(md_path)}

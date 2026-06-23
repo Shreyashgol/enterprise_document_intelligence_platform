@@ -10,6 +10,9 @@ from app.evaluation.evaluate import (
     token_confusion_matrix,
     evaluate_predictions,
     save_report,
+    compare_models,
+    save_comparison,
+    LADDER_DISPLAY,
     CONFUSION_LABELS,
     _tag_to_type,
 )
@@ -109,7 +112,8 @@ class TestEndToEndWithModel:
         torch.manual_seed(0)
         model = build_model_from_vocabs(wv, tv, embed_dim=32, hidden_dim=32, dropout=0.0)
         trainer = Trainer(model, tv, TrainConfig(epochs=20, lr=1e-2, patience=20,
-                                                 device="cpu", verbose=False))
+                                                 device="cpu", verbose=False,
+                                                 checkpoint_dir=str(tmp_path)))
         dl = make_dataloader(ds, batch_size=12, shuffle=True)
         trainer.fit(dl, dl)
 
@@ -118,3 +122,76 @@ class TestEndToEndWithModel:
         assert report.micro.f1 >= 0.95
         paths = save_report(report, out_dir=tmp_path, name="trained")
         assert (tmp_path / "trained.md").exists()
+
+    def test_evaluate_bilstm_crf_via_viterbi(self, tmp_path):
+        # family-aware collect_predictions must drive Viterbi decode for the CRF.
+        torch = pytest.importorskip("torch")
+        from tests.test_train import _make_setup
+        from app.datasets.dataset import make_dataloader
+        from app.ner.train import Trainer, TrainConfig, build_model
+        from app.evaluation.evaluate import evaluate_model
+
+        ds, wv, tv = _make_setup()
+        torch.manual_seed(0)
+        model = build_model("bilstm_crf", word_vocab=wv, tag_vocab=tv,
+                            embed_dim=32, hidden_dim=32, dropout=0.0)
+        trainer = Trainer(model, tv, TrainConfig(epochs=30, lr=1e-2, patience=30,
+                                                 device="cpu", verbose=False,
+                                                 checkpoint_dir=str(tmp_path)))
+        dl = make_dataloader(ds, batch_size=12, shuffle=True)
+        trainer.fit(dl, dl)
+        report = evaluate_model(model, dl, tv, device="cpu")
+        assert report.micro.f1 >= 0.95
+
+
+# ---------------------------------------------------------------------------
+# Four-way comparison
+# ---------------------------------------------------------------------------
+class TestComparison:
+    def _reports(self):
+        perfect = evaluate_predictions(
+            [["B-PERSON", "I-PERSON", "O", "B-ORG"]],
+            [["B-PERSON", "I-PERSON", "O", "B-ORG"]],
+        )
+        missed = evaluate_predictions(
+            [["B-PERSON", "I-PERSON", "O", "B-ORG"]],
+            [["B-PERSON", "I-PERSON", "O", "O"]],  # missed ORG -> lower F1
+        )
+        return perfect, missed
+
+    def test_delta_is_f1_gain_over_prev(self):
+        perfect, missed = self._reports()
+        comp = compare_models([("BiLSTM", missed), ("BiLSTM + CRF", perfect)])
+        assert comp.rows[0]["delta"] is None
+        assert comp.rows[1]["delta"] == pytest.approx(
+            perfect.micro.f1 - missed.micro.f1
+        )
+        assert comp.rows[1]["delta"] > 0
+
+    def test_rows_preserve_input_order(self):
+        perfect, missed = self._reports()
+        comp = compare_models([("A", perfect), ("B", missed), ("C", perfect)])
+        assert [r["name"] for r in comp.rows] == ["A", "B", "C"]
+
+    def test_markdown_has_table_and_analysis(self):
+        perfect, missed = self._reports()
+        comp = compare_models([("BiLSTM", missed), ("BiLSTM + CRF", perfect)],
+                              analysis="CRF helps the BiLSTM here.")
+        md = comp.to_markdown()
+        assert "# NER Model Comparison" in md
+        assert "Δ vs prev" in md
+        assert "BiLSTM + CRF" in md
+        assert "## Analysis" in md and "CRF helps" in md
+
+    def test_save_comparison_writes_both(self, tmp_path):
+        perfect, missed = self._reports()
+        comp = compare_models([("BiLSTM", missed), ("BiLSTM + CRF", perfect)])
+        paths = save_comparison(comp, out_dir=tmp_path, name="cmp")
+        assert (tmp_path / "cmp.json").exists() and (tmp_path / "cmp.md").exists()
+        loaded = json.loads((tmp_path / "cmp.json").read_text())
+        assert len(loaded["rows"]) == 2
+
+    def test_ladder_display_is_canonical_order(self):
+        assert [k for k, _ in LADDER_DISPLAY] == [
+            "bilstm", "bilstm_crf", "bert", "bert_crf"
+        ]

@@ -3,12 +3,25 @@
 ## 1. What this phase delivers
 
 Phase 8 produced the scalar metrics (P/R/F1). Phase 9 turns them into a
-**diagnosable report**:
+**diagnosable report** and the **four-way ladder comparison**:
 
 - per-label + micro entity-level P/R/F1 (from Phase 8 metrics),
 - a **token-level confusion matrix** over entity types,
+- a **model comparison table** (BiLSTM → BiLSTM+CRF → BERT → BERT+CRF) scored on
+  the same test split, with `Δ vs prev` and an auto-generated analysis,
 - Markdown + JSON rendering,
 - persistence to `evaluation/reports/`.
+
+### Family-aware scoring
+
+`evaluate_model` / `collect_predictions` work for **every** ladder model, not
+just the BiLSTM baseline. They reuse the Phase 8 training adapters
+(`_select_adapter`) to decode each batch to **word-level** tag sequences —
+argmax for the linear heads, Viterbi for the CRFs, subwords mapped back to words
+for the transformer models. Because eval shares the trainer's exact decode path,
+the two never diverge, and all four models are compared on identical word-level
+footing (token-level metrics would overstate NER quality and aren't comparable
+across decoders).
 
 ## 2. Why a confusion matrix on top of F1
 
@@ -83,6 +96,54 @@ report.confusion                       # 9x9 list[list[int]]
 model overfitting the toy training set — on held-out data the off-diagonal cells
 become the actionable error map.
 
+## 5b. The four-way comparison (headline artifact)
+
+```python
+from app.evaluation.evaluate import compare_models, save_comparison
+
+comparison = compare_models([
+    ("BiLSTM",       bilstm_report),
+    ("BiLSTM + CRF", bilstm_crf_report),
+    ("BERT",         bert_report),
+    ("BERT + CRF",   bert_crf_report),
+])
+save_comparison(comparison, out_dir="evaluation/reports", name="comparison")
+```
+
+renders:
+
+```
+| Model        | Precision | Recall |  F1   | Δ vs prev |
+|--------------|----------:|-------:|------:|----------:|
+| BiLSTM       |    ...    |  ...   |   A   |     —     |
+| BiLSTM + CRF |    ...    |  ...   |   B   |  B − A    |  ← larger gain
+| BERT         |    ...    |  ...   |   C   |  C − B    |
+| BERT + CRF   |    ...    |  ...   |   D   |  D − C    |  ← smaller gain
+```
+
+**The expected insight (stated, not just dumped):** the CRF helps the **BiLSTM
+substantially** but helps **BERT less**. A strong contextual encoder already
+implicitly captures much of the tag-transition structure the CRF enforces
+explicitly, so the CRF's marginal value shrinks once the underlying features are
+good enough. `scripts/compare_models.py` auto-writes this narrative from the
+measured deltas.
+
+### Generating it
+
+```bash
+cd backend && source .venv/bin/activate
+# all four — downloads the encoder; uses one split/seed for an honest comparison
+python -m scripts.compare_models --models bilstm bilstm_crf bert bert_crf
+# from-scratch only (fast, no download)
+python -m scripts.compare_models --models bilstm bilstm_crf
+```
+
+Every model trains on the **same split and seed** (Phase 8 discipline), so each
+`Δ` isolates exactly one change — adding the CRF, or swapping to a pretrained
+encoder. On the easy synthetic corpus both from-scratch models saturate near
+F1 = 1.0 (no delta to show); the gap the comparison is built to expose appears on
+a harder/real corpus and on the transformer rows.
+
 ## 6. Design notes
 
 - **Reuses Phase 8 metrics** (`classification_report`) — one source of truth for
@@ -98,8 +159,9 @@ become the actionable error map.
 
 | Path | Purpose |
 |------|---------|
-| `backend/app/evaluation/evaluate.py` | confusion matrix, `EvaluationReport`, `evaluate_model`, `save_report` |
-| `backend/tests/test_evaluate.py` | 11 tests (incl. end-to-end on a trained model) |
+| `backend/app/evaluation/evaluate.py` | confusion matrix, `EvaluationReport`, family-aware `evaluate_model`, `compare_models` / `ModelComparison`, `save_report` / `save_comparison` |
+| `backend/scripts/compare_models.py` | trains the ladder on one split + writes the four-way comparison |
+| `backend/tests/test_evaluate.py` | 17 tests (incl. CRF eval via Viterbi + comparison table) |
 | `backend/app/evaluation/reports/` | persisted reports |
 
 ## 8. Running

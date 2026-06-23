@@ -27,11 +27,22 @@ similarity.
 > "signed a contract"). This is exactly why the learned embedder exists, and why
 > transformer embeddings are the eventual upgrade.
 
-### `ModelEmbedder` — learned
-Mean-pools the Phase 7 model's learned word embeddings over the document's
-tokens. A *distributed* representation: words the model learned to relate sit
-near each other, so similarity reflects learned structure, not just surface
-overlap.
+### `ModelEmbedder` — learned (word-level)
+Mean-pools the word-level Phase 7 model's learned word embeddings over the
+document's tokens. A *distributed* representation: words the model learned to
+relate sit near each other, so similarity reflects learned structure, not just
+surface overlap. Serves both `NERModel` (7A) and `BiLSTMCRF` (7B) — it resolves
+the embedding layer (on the model, or on the wrapped `encoder` for the CRF).
+
+### `TransformerEmbedder` — contextual sentence embeddings (7C/7D)
+Runs a pretrained encoder and **masked mean-pools** the `last_hidden_state` over
+the real (non-pad) tokens, then L2-normalizes — the standard sentence-embedding
+recipe. Because the representation is contextual (learned from billions of
+tokens), paraphrases with little word overlap still land close, which the lexical
+and from-scratch embedders can't capture. Build it from a model name, or
+`TransformerEmbedder.from_ner_model(model)` to reuse a trained 7C/7D encoder.
+All three embedders share the `embed(text) -> np.ndarray` interface, so they drop
+into the same `EmbeddingIndex` / vector store unchanged.
 
 ## 3. Vector stores
 
@@ -112,10 +123,10 @@ never committed).
 
 | Path | Purpose |
 |------|---------|
-| `backend/app/embeddings/embedder.py` | `HashingEmbedder`, `ModelEmbedder` |
+| `backend/app/embeddings/embedder.py` | `HashingEmbedder`, `ModelEmbedder`, `TransformerEmbedder` |
 | `backend/app/storage/vector_store.py` | `InMemoryVectorStore`, `PgVectorStore` |
 | `backend/app/embeddings/index.py` | `EmbeddingIndex` |
-| `backend/tests/test_embeddings.py` | 20 tests (2 live pgvector, gated on `DATABASE_URL`) |
+| `backend/tests/test_embeddings.py` | 26 tests (transformer embedder gated on `transformers`; 2 live pgvector gated on `DATABASE_URL`) |
 | `docker/docker-compose.yml` | local Postgres + pgvector |
 
 ## 9. Running

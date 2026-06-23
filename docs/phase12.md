@@ -57,9 +57,14 @@ kg.query_graph(full=True)   # adds labels, counts, doc_ids, triggers
 | `stats()` | counts by label & relation |
 | `save` / `load` / `to_dict` / `from_dict` | JSON persistence |
 
-`ingest` resolves relation endpoints (which arrive as plain `{source,relation,
-target}` strings from Phase 11) against the entities just added, recovering their
-node ids — the clean seam between the per-document pipeline and the global graph.
+`ingest` resolves relation endpoints (which arrive as `{source,relation,target}`
+strings from Phase 11) against the entities just added, recovering their node ids
+— the clean seam between the per-document pipeline and the global graph. When the
+**richer** Phase 11 form (`to_dict_full`, which the API passes) is supplied, the
+`source_label`/`target_label` disambiguate same-surface entities of different
+types (e.g. "Apple" the `ORG` vs the `PRODUCT`) and the matched `trigger` is
+recorded as edge provenance. Both keys are optional, so bare triples still ingest
+unchanged.
 
 ## 5. Cross-document fusion (the payoff)
 
@@ -93,7 +98,7 @@ connected facts that were never adjacent in any single source.
 | Path | Purpose |
 |------|---------|
 | `backend/app/graph/knowledge_graph.py` | `KnowledgeGraph` |
-| `backend/tests/test_graph.py` | 23 tests (dedup, query, ingest, cross-doc, IO) |
+| `backend/tests/test_graph.py` | 27 tests (dedup, query, ingest, label disambiguation, cross-doc, IO) |
 
 ## 8. Running
 

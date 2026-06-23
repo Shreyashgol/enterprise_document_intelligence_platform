@@ -122,7 +122,7 @@ class TestTaggers:
     def test_default_tagger_is_rule(self):
         assert DocumentPipeline().tagger.name == "rule"
 
-    def test_model_tagger_round_trip(self):
+    def test_model_tagger_round_trip(self, tmp_path):
         torch = pytest.importorskip("torch")
         from tests.test_train import _make_setup
         from app.datasets.dataset import make_dataloader
@@ -134,7 +134,8 @@ class TestTaggers:
         torch.manual_seed(0)
         model = build_model_from_vocabs(wv, tv, embed_dim=32, hidden_dim=32, dropout=0.0)
         Trainer(model, tv, TrainConfig(epochs=20, lr=1e-2, patience=20,
-                                       device="cpu", verbose=False)).fit(
+                                       device="cpu", verbose=False,
+                                       checkpoint_dir=str(tmp_path))).fit(
             make_dataloader(ds, batch_size=12, shuffle=True),
             make_dataloader(ds, batch_size=12),
         )
@@ -145,7 +146,7 @@ class TestTaggers:
         assert "PERSON" in labels and "ORG" in labels
         assert all(e.source == "model" for e in ents)
 
-    def test_hybrid_tagger_combines(self):
+    def test_hybrid_tagger_combines(self, tmp_path):
         torch = pytest.importorskip("torch")
         from tests.test_train import _make_setup
         from app.datasets.dataset import make_dataloader
@@ -157,7 +158,8 @@ class TestTaggers:
         torch.manual_seed(0)
         model = build_model_from_vocabs(wv, tv, embed_dim=32, hidden_dim=32, dropout=0.0)
         Trainer(model, tv, TrainConfig(epochs=20, lr=1e-2, patience=20,
-                                       device="cpu", verbose=False)).fit(
+                                       device="cpu", verbose=False,
+                                       checkpoint_dir=str(tmp_path))).fit(
             make_dataloader(ds, batch_size=12, shuffle=True),
             make_dataloader(ds, batch_size=12),
         )
@@ -167,3 +169,105 @@ class TestTaggers:
         # rules supply EMAIL, model supplies PERSON/ORG
         assert "EMAIL" in labels
         assert "PERSON" in labels or "ORG" in labels
+
+    def _train_bilstm_crf(self, tmp_path):
+        torch = pytest.importorskip("torch")
+        from tests.test_train import _make_setup
+        from app.datasets.dataset import make_dataloader
+        from app.ner.train import Trainer, TrainConfig, build_model
+
+        ds, wv, tv = _make_setup()
+        torch.manual_seed(0)
+        model = build_model("bilstm_crf", word_vocab=wv, tag_vocab=tv,
+                            embed_dim=32, hidden_dim=32, dropout=0.0)
+        Trainer(model, tv, TrainConfig(epochs=30, lr=1e-2, patience=30,
+                                       device="cpu", verbose=False,
+                                       checkpoint_dir=str(tmp_path))).fit(
+            make_dataloader(ds, batch_size=12, shuffle=True),
+            make_dataloader(ds, batch_size=12),
+        )
+        return model, wv, tv
+
+    def test_model_tagger_serves_bilstm_crf(self, tmp_path):
+        # the CRF model decodes via Viterbi (model.decode), not argmax.
+        from app.ner.tagger import ModelTagger
+        from app.ner.bilstm_crf import BiLSTMCRF
+
+        model, wv, tv = self._train_bilstm_crf(tmp_path)
+        assert isinstance(model, BiLSTMCRF)
+        ents = ModelTagger(model, wv, tv).extract("John Smith works at OpenAI")
+        labels = {e.label for e in ents}
+        assert "PERSON" in labels and "ORG" in labels
+
+    def test_model_tagger_from_checkpoint_autodetects_crf(self, tmp_path):
+        from app.ner.tagger import ModelTagger
+        from app.ner.bilstm_crf import BiLSTMCRF
+
+        model, wv, tv = self._train_bilstm_crf(tmp_path)
+        model.save_checkpoint(tmp_path / "m.pt")
+        wv.save(tmp_path / "wv.json")
+        tv.save(tmp_path / "tv.json")
+        tagger = ModelTagger.from_checkpoint(
+            str(tmp_path / "m.pt"), str(tmp_path / "wv.json"), str(tmp_path / "tv.json")
+        )
+        assert isinstance(tagger.model, BiLSTMCRF)  # detected from CRF weights
+        ents = tagger.extract("John Smith works at OpenAI")
+        assert {e.label for e in ents} >= {"PERSON", "ORG"}
+
+
+# ---------------------------------------------------------------------------
+# Transformer tagger (7C/7D) — needs transformers + tiny model
+# ---------------------------------------------------------------------------
+TINY_MODEL = "hf-internal-testing/tiny-random-BertModel"
+
+
+@pytest.fixture(scope="module")
+def deps():
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    from app.ner.bert_ner import load_tokenizer
+    from app.datasets.vocabulary import build_tag_vocabulary
+
+    try:
+        tok = load_tokenizer(TINY_MODEL)
+    except Exception as exc:
+        pytest.skip(f"could not load {TINY_MODEL}: {exc}")
+    return tok, build_tag_vocabulary()
+
+
+class TestBertTagger:
+    def test_extract_contract_untrained(self, deps):
+        # an untrained model emits noise, but the serving path must return a
+        # well-formed Entity list whose spans land inside the source text.
+        tok, tv = deps
+        from app.ner.bert_ner import BertNER, BertNERConfig
+        from app.ner.tagger import BertTagger
+
+        model = BertNER(BertNERConfig(num_tags=len(tv), encoder_name=TINY_MODEL))
+        text = "John Smith works at OpenAI"
+        ents = BertTagger(model, tv, tok).extract(text)
+        assert isinstance(ents, list)
+        for e in ents:
+            assert text[e.start:e.end] == e.text
+            assert e.source == "model"
+
+    def test_bert_crf_serves_after_overfit(self, deps, tmp_path):
+        torch = pytest.importorskip("torch")
+        from app.ner.train import Trainer, TrainConfig, build_model
+        from app.datasets.bert_dataset import BertNERDataset, make_bert_dataloader
+        from app.ner.tagger import BertTagger
+        from app.ner.bert_crf import BertCRF
+        from tests.test_train import _annotations
+
+        tok, tv = deps
+        torch.manual_seed(0)
+        model = build_model("bert_crf", tag_vocab=tv, encoder_name=TINY_MODEL)
+        dl = make_bert_dataloader(BertNERDataset(_annotations(6), tv), tok,
+                                  batch_size=9, shuffle=True)
+        Trainer(model, tv, TrainConfig(model="bert_crf", epochs=30, lr=5e-3,
+                                       patience=30, device="cpu", verbose=False,
+                                       checkpoint_dir=str(tmp_path))).fit(dl, dl)
+        assert isinstance(model, BertCRF)
+        ents = BertTagger(model, tv, tok).extract("John Smith works at OpenAI")
+        # overfit tiny model should recover at least one open-class entity
+        assert any(e.label in {"PERSON", "ORG"} for e in ents)

@@ -189,9 +189,11 @@ async def upload_document(file: UploadFile = File(...)) -> s.DocumentResponse:
     entities = services.tagger.extract(text)
     relations = services.relation_extractor.extract(text, entities)
 
-    # index for semantic search + add to the knowledge graph
+    # index for semantic search + add to the knowledge graph. Pass the *full*
+    # relation form so the graph can disambiguate endpoints by entity type and
+    # keep each edge's trigger as provenance (the response stays minimal).
     services.index.index_document(doc_id, text, {"filename": file.filename})
-    services.kg.ingest(entities, [r.to_dict() for r in relations], doc_id=doc_id)
+    services.kg.ingest(entities, [r.to_dict_full() for r in relations], doc_id=doc_id)
 
     logger.info(
         "indexed doc %s (%s): %d entities, %d relations",

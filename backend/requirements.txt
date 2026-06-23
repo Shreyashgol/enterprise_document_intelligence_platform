@@ -6,6 +6,10 @@ pytest>=8.0
 torch>=2.2
 numpy>=1.26
 
+# Phase 7C/7D (pretrained encoder weights + fast tokenizer only — the NER head
+# and CRF stay our own code; no prebuilt NER framework):
+transformers>=4.40
+
 # Phase 10 (document ingestion):
 pypdf>=6.0
 python-docx>=1.1

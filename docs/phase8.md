@@ -2,14 +2,43 @@
 
 ## 1. What this phase delivers
 
-A **config-driven `Trainer`** that turns the Phase 7 model + Phase 6 data into a
-learned NER tagger, tracking the right metrics and guarding against overfitting:
+A **single config-driven `Trainer`** that trains **every** model in the Phase 7
+ladder (7A–7D) and tracks the right metrics while guarding against overfitting:
 
-- masked cross-entropy loss (padding ignored),
-- Adam + optional gradient clipping,
-- per-epoch **loss / precision / recall / F1**,
+- per-family loss (masked CE for the linear heads; sequence NLL for the CRFs),
+- Adam / AdamW + optional gradient clipping,
+- per-epoch **loss / precision / recall / F1** (entity-level),
 - **early stopping** on a monitored metric,
 - **best-checkpoint** saving.
+
+### One trainer, four models
+
+The `Trainer` dispatches on the *model instance* — so the public API
+`Trainer(model, tag_vocab, config)` is unchanged from the 7A baseline — via a
+small per-family **adapter** that knows how to turn a batch into a loss and into
+(predicted, gold) **word-level** tag sequences for scoring:
+
+| `model`      | batch source        | loss                          | decode        |
+|--------------|---------------------|-------------------------------|---------------|
+| `bilstm`     | word-level (Ph. 6)  | token cross-entropy           | argmax        |
+| `bilstm_crf` | word-level (Ph. 6)  | CRF sequence NLL              | Viterbi       |
+| `bert`       | subword (Ph. 8)     | subword CE, `-100` ignored    | argmax → word |
+| `bert_crf`   | subword (Ph. 8)     | CRF sequence NLL (gathered)   | Viterbi → word|
+
+`build_model("bilstm_crf", word_vocab=…, tag_vocab=…)` (and `"bert"` /
+`"bert_crf"` with `encoder_name=…`) is the construction dispatch point. The
+transformer models consume the **subword** pipeline in
+`app/datasets/bert_dataset.py` (`BertNERDataset` + `make_bert_dataloader`), which
+emits `input_ids` / `attention_mask` / `word_ids` / per-word `word_labels`; the
+per-head subword↔word alignment happens inside the adapter (Phase 7C/7D).
+
+### Honest-comparison discipline
+
+The from-scratch runs share embeddings, hidden size, epochs, optimizer, **seed**,
+and the train/val/test split, so any F1 delta is attributable to the CRF alone.
+Transformer runs keep the same seed/splits but use their own optimization: a
+small encoder LR (`encoder_lr`, e.g. `2e-5`) on the pretrained weights with a
+larger `lr` on the fresh head, plus optional linear `warmup_steps`.
 
 ## 2. Metrics — why entity-level, not token accuracy
 
@@ -52,29 +81,49 @@ best checkpoint. Cheap, standard overfitting guard.
 ```python
 @dataclass
 class TrainConfig:
+    model: str = "bilstm"          # bilstm | bilstm_crf | bert | bert_crf
     epochs: int = 20
-    lr: float = 1e-3
+    lr: float = 1e-3               # head / from-scratch LR
+    encoder_lr: float | None = None  # transformer encoder LR (e.g. 2e-5)
+    warmup_steps: int = 0          # linear LR warmup (optimizer steps); 0 = off
     weight_decay: float = 0.0
     grad_clip: float | None = 5.0
     patience: int = 5
     min_delta: float = 1e-4
-    monitor: str = "f1"        # or "loss"
+    monitor: str = "f1"            # or "loss"
     seed: int = 42
-    device: str | None = None  # auto: cuda/mps/cpu
+    device: str | None = None      # auto: cuda/mps/cpu
     checkpoint_dir: str = "models"
     checkpoint_name: str = "ner_best.pt"
 ```
 
+When `encoder_lr` is set on a transformer model, the optimizer is **AdamW** with
+two parameter groups (encoder vs. head); `warmup_steps > 0` adds a linear warmup
+scheduler stepped once per batch.
+
 ## 6. Usage
 
 ```python
-from app.ner.train import Trainer, TrainConfig
-from app.ner.model import build_model_from_vocabs
+from app.ner.train import Trainer, TrainConfig, build_model
 
-model   = build_model_from_vocabs(word_vocab, tag_vocab)
-trainer = Trainer(model, tag_vocab, TrainConfig(epochs=20, lr=1e-3))
-history = trainer.fit(train_loader, val_loader)   # -> per-epoch records
-# best checkpoint at models/ner_best.pt; trainer.best_epoch / best_score
+# from-scratch (7A / 7B)
+model   = build_model("bilstm_crf", word_vocab=word_vocab, tag_vocab=tag_vocab)
+trainer = Trainer(model, tag_vocab, TrainConfig(model="bilstm_crf", epochs=20))
+history = trainer.fit(train_loader, val_loader)
+
+# transformer (7C / 7D)
+model   = build_model("bert_crf", tag_vocab=tag_vocab, encoder_name="bert-base-uncased")
+trainer = Trainer(model, tag_vocab,
+                  TrainConfig(model="bert_crf", lr=1e-3, encoder_lr=2e-5, warmup_steps=100))
+history = trainer.fit(bert_train_loader, bert_val_loader)
+```
+
+The one runner trains any of the four (`backend/scripts/train_ner.py`):
+
+```bash
+python -m scripts.train_ner --model bilstm          # default → models/ner_best.pt
+python -m scripts.train_ner --model bilstm_crf
+python -m scripts.train_ner --model bert_crf --encoder bert-base-uncased
 ```
 
 ## 7. Proof it learns
@@ -96,21 +145,28 @@ needs a real corpus and is measured in Phase 9.)
 
 ## 8. Design notes
 
-- **Gradient clipping** (`grad_clip=5.0`) stabilizes LSTM training against
-  exploding gradients.
-- **`evaluate` decodes ids→tags per real length** (using the batch mask's
-  `lengths`) so padding never enters the metric.
-- **The checkpoint stores epoch + metrics + train config** in `extra`, so a
-  saved model is fully reproducible/auditable.
-- **Determinism**: `torch.manual_seed(config.seed)` at trainer init.
+- **Per-family adapters** (`_WordLevelCE`, `_WordLevelCRF`, `_SubwordCE`,
+  `_SubwordCRF`) isolate every difference between the four models; the loop,
+  early stopping, and checkpointing are written once and shared.
+- **Gradient clipping** (`grad_clip=5.0`) stabilizes LSTM/encoder training.
+- **`evaluate` always scores at word level** — subword predictions are mapped
+  back to words (`gather_word_predictions`) before metrics, so all four models
+  are directly comparable to one another and to 7A/7B.
+- **The checkpoint stores epoch + metrics + train config** in `extra`; every
+  model carries its own config, so a saved model is self-describing.
+- **Determinism**: `torch.manual_seed(config.seed)` at trainer init; same
+  seed/splits across runs for an honest Phase 9 comparison.
 
 ## 9. Files
 
 | Path | Purpose |
 |------|---------|
-| `backend/app/ner/train.py` | `Trainer`, `TrainConfig` |
+| `backend/app/ner/train.py` | `Trainer`, `TrainConfig`, adapters, `build_model` |
+| `backend/app/datasets/bert_dataset.py` | subword data pipeline (7C/7D) |
+| `backend/app/ner/decode.py` | subword↔word alignment used by the adapters |
 | `backend/app/evaluation/metrics.py` | entity-level P/R/F1 + report |
-| `backend/tests/test_train.py` | 9 tests incl. a real overfitting run |
+| `backend/scripts/train_ner.py` | one runner for all four models |
+| `backend/tests/test_train.py` | 20 tests incl. real overfitting runs |
 | `backend/tests/test_metrics.py` | 10 tests |
 
 ## 10. Running
